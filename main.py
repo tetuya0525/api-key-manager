@@ -1,10 +1,3 @@
-# ==============================================================================
-# Memory Library - API Key Manager Service
-# main.py (DEBUGGING VERSION)
-#
-# Role:         Firebaseへの接続を一時的に無効化し、
-#               サービスが正常に起動・応答できるかを検証するためのデバッグ用コード。
-# ==============================================================================
 import os
 from flask import Flask, request, jsonify
 import logging
