@@ -4,15 +4,29 @@ import hashlib
 from flask import Flask, request, jsonify
 import firebase_admin
 from firebase_admin import firestore
+import logging
 
 # --- 初期化 (Initialization) ---
-try:
-    firebase_admin.initialize_app()
-    db = firestore.client()
-except ValueError:
-    pass
-
 app = Flask(__name__)
+logging.basicConfig(level=logging.INFO)
+
+# Firestoreクライアントをグローバル変数として保持 (遅延初期化)
+db = None
+
+def get_firestore_client():
+    """
+    Firestoreクライアントをシングルトンとして取得・初期化する。
+    他の安定したサービスと同じ、堅牢な方式。
+    """
+    global db
+    if db is None:
+        try:
+            firebase_admin.initialize_app()
+            db = firestore.client()
+            app.logger.info("Firebase app initialized successfully.")
+        except Exception as e:
+            app.logger.error(f"Error initializing Firebase app: {e}")
+    return db
 
 # --- メインロジック ---
 
@@ -22,6 +36,10 @@ def generate_api_key():
     新しいAPIキーを生成し、ハッシュ化してDBに保存後、
     平文のキーを一度だけ返す。
     """
+    db_client = get_firestore_client()
+    if not db_client:
+        return jsonify({"status": "error", "message": "データベース接続エラー"}), 500
+
     data = request.get_json()
     user_id = data.get('userId')
     label = data.get('label')
@@ -30,13 +48,8 @@ def generate_api_key():
         return jsonify({"status": "error", "message": "userIdとlabelは必須です。"}), 400
 
     try:
-        # 1. 安全なAPIキーを生成
         plaintext_key = f"sk_{secrets.token_urlsafe(36)}"
-
-        # 2. キーをハッシュ化
         hashed_key = hashlib.sha256(plaintext_key.encode('utf-8')).hexdigest()
-
-        # 3. Firestoreに保存するデータを作成
         key_data = {
             'userId': user_id,
             'label': label,
@@ -45,13 +58,8 @@ def generate_api_key():
             'createdAt': firestore.SERVER_TIMESTAMP,
             'lastUsedAt': None
         }
-
-        # 4. Firestoreにドキュメントを追加
-        db.collection('api_keys').add(key_data)
-
+        db_client.collection('api_keys').add(key_data)
         app.logger.info(f"新しいAPIキーを生成しました。 Label: {label}")
-
-        # 5. 平文のキーを一度だけ返す
         return jsonify({
             "status": "success",
             "apiKey": plaintext_key,
@@ -68,6 +76,10 @@ def revoke_api_key():
     """
     指定されたAPIキー(のドキュメントID)を無効化する。
     """
+    db_client = get_firestore_client()
+    if not db_client:
+        return jsonify({"status": "error", "message": "データベース接続エラー"}), 500
+        
     data = request.get_json()
     key_id = data.get('keyId')
     user_id = data.get('userId')
@@ -76,7 +88,7 @@ def revoke_api_key():
         return jsonify({"status": "error", "message": "keyIdとuserIdは必須です。"}), 400
 
     try:
-        key_ref = db.collection('api_keys').document(key_id)
+        key_ref = db_client.collection('api_keys').document(key_id)
         key_doc = key_ref.get()
 
         if not key_doc.exists:
